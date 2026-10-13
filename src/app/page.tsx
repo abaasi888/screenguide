@@ -1,69 +1,89 @@
-import Image from "next/image";
-import styles from "./page.module.css";
+'use client';
+
+import { useState } from 'react';
+import { extractMedia } from '@/lib/ffmpeg';
+import { Guide } from '@/lib/schema';
+import GuideView from '@/components/Guide';
+
+type Status = 'idle' | 'extracting' | 'transcribing' | 'analysing' | 'done' | 'error';
 
 export default function Home() {
+  const [file, setFile] = useState<File | null>(null);
+  const [videoUrl, setVideoUrl] = useState<string>('');
+  const [guide, setGuide] = useState<Guide | null>(null);
+  const [status, setStatus] = useState<Status>('idle');
+  const [error, setError] = useState<string>('');
+
+  const handleFile = (f: File) => {
+    setFile(f);
+    setVideoUrl(URL.createObjectURL(f));
+    setGuide(null);
+    setError('');
+    setStatus('idle');
+  };
+
+  const generate = async () => {
+    if (!file) return;
+    try {
+      setError('');
+      setStatus('extracting');
+      const { audio, frames } = await extractMedia(file);
+
+      setStatus('transcribing');
+      const audioBlob = new Blob([audio as Uint8Array<ArrayBuffer>], { type: 'audio/wav' });
+      const fd = new FormData();
+      fd.append('audio', audioBlob, 'audio.wav');
+      const transRes = await fetch('/api/transcribe', { method: 'POST', body: fd });
+      if (!transRes.ok) throw new Error('Transcription failed');
+      const transcript = await transRes.json();
+
+      setStatus('analysing');
+      const analyseRes = await fetch('/api/analyse', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ transcript, frames }),
+      });
+      if (!analyseRes.ok) throw new Error('Analysis failed');
+      const data = await analyseRes.json();
+
+      setGuide(data);
+      setStatus('done');
+    } catch (e: any) {
+      console.error(e);
+      setError(e.message || 'Something went wrong');
+      setStatus('error');
+    }
+  };
+
   return (
-    <div className={styles.page}>
-      <main className={styles.main}>
-        <Image
-          className={styles.logo}
-          src="/next.svg"
-          alt="Next.js logo"
-          width={100}
-          height={20}
-          priority
-        />
-        <div className={styles.intro}>
-          <h1>
-            To get started, edit the{" "}
-            <code className={styles.code}>page.tsx</code> file.
-          </h1>
-          <p>
-            Looking for a starting point or more instructions? Head over to{" "}
-            <a
-              href="https://vercel.com/templates?framework=next.js&utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Templates
-            </a>{" "}
-            or the{" "}
-            <a
-              href="https://nextjs.org/learn?utm_source=create-next-app&utm_medium=appdir-template-tw&utm_campaign=create-next-app"
-              target="_blank"
-              rel="noopener noreferrer"
-            >
-              Learning
-            </a>{" "}
-            center.
-          </p>
-        </div>
-        <div className={styles.ctas}>
-          <a
-            className={styles.primary}
-            href="https://vercel.com/new?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            <Image
-              className={styles.logo}
-              src="/vercel.svg"
-              alt="Vercel logomark"
-              width={16}
-              height={14}
-            />
-            Deploy Now
-          </a>
-          <a
-            className={styles.secondary}
-            href="https://nextjs.org/docs?utm_source=create-next-app&utm_medium=appdir-template&utm_campaign=create-next-app"
-            target="_blank"
-            rel="noopener noreferrer"
-          >
-            Documentation
-          </a>
-        </div>
-      </main>
-    </div>
+    <main className="container">
+      <h1>ScreenGuide</h1>
+      <p className="subtitle">
+        Upload a 2-minute screen recording. Get a timestamped how-to guide.
+      </p>
+
+      <input
+        className="file-input"
+        type="file"
+        accept="video/mp4"
+        onChange={(e) => e.target.files?.[0] && handleFile(e.target.files[0])}
+      />
+
+      {file && (
+        <button
+          className="btn"
+          onClick={generate}
+          disabled={
+            status === 'extracting' || status === 'transcribing' || status === 'analysing'
+          }
+        >
+          {status === 'idle' ? 'Generate how-to' : status}
+        </button>
+      )}
+
+      {error && <div className="error-box">{error}</div>}
+
+      {guide && videoUrl && <GuideView guide={guide} videoUrl={videoUrl} />}
+    </main>
   );
 }
