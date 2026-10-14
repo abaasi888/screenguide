@@ -45,7 +45,7 @@ export async function extractMedia(file: File): Promise<ExtractedMedia> {
   await ff.exec([
     '-i', 'input.mp4',
     '-vn', '-acodec', 'pcm_s16le',
-    '-ar', '16000', '-ac', '1',
+    '-ar', '8000', '-ac', '1',
     'audio.wav',
   ]);
   const audio = (await ff.readFile('audio.wav')) as Uint8Array;
