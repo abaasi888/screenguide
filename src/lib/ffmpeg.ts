@@ -6,9 +6,11 @@ let ffmpeg: FFmpeg | null = null;
 async function getFFmpeg(): Promise<FFmpeg> {
   if (ffmpeg) return ffmpeg;
   ffmpeg = new FFmpeg();
+  ffmpeg.on('log', ({ message }) => console.log('[ffmpeg log]', message));
+  const baseURL = 'https://unpkg.com/@ffmpeg/core@0.12.10/dist/umd';
   await ffmpeg.load({
-    coreURL: await toBlobURL('/ffmpeg-core.js', 'text/javascript'),
-    wasmURL: await toBlobURL('/ffmpeg-core.wasm', 'application/wasm'),
+    coreURL: await toBlobURL(`${baseURL}/ffmpeg-core.js`, 'text/javascript'),
+    wasmURL: await toBlobURL(`${baseURL}/ffmpeg-core.wasm`, 'application/wasm'),
   });
   return ffmpeg;
 }
@@ -32,11 +34,14 @@ export interface ExtractedMedia {
 }
 
 export async function extractMedia(file: File): Promise<ExtractedMedia> {
+  console.log('[extract] start');
   const ff = await getFFmpeg();
   const duration = await getVideoDuration(file);
+  console.log('[extract] duration:', duration);
 
   await ff.writeFile('input.mp4', await fetchFile(file));
 
+  console.log('[extract] extracting audio');
   await ff.exec([
     '-i', 'input.mp4',
     '-vn', '-acodec', 'pcm_s16le',
@@ -44,17 +49,21 @@ export async function extractMedia(file: File): Promise<ExtractedMedia> {
     'audio.wav',
   ]);
   const audio = (await ff.readFile('audio.wav')) as Uint8Array;
+  console.log('[extract] audio done, bytes:', audio.length);
 
+  console.log('[extract] extracting sampled frames');
+  const step = 8;
   await ff.exec([
     '-i', 'input.mp4',
-    '-vf', 'fps=1/2',
-    '-q:v', '4',
+    '-vf', 'fps=1/8,scale=1280:-2',
+    '-q:v', '6',
     'frame_%03d.jpg',
   ]);
+  console.log('[extract] frames written');
 
   const frames: { timestamp: number; base64: string }[] = [];
-  const count = Math.ceil(duration / 2);
-  for (let i = 1; i <= count; i++) {
+  let i = 1;
+  while (true) {
     const name = `frame_${String(i).padStart(3, '0')}.jpg`;
     try {
       const data = (await ff.readFile(name)) as Uint8Array;
@@ -62,11 +71,13 @@ export async function extractMedia(file: File): Promise<ExtractedMedia> {
       for (let j = 0; j < data.length; j++) {
         binary += String.fromCharCode(data[j]);
       }
-      frames.push({ timestamp: (i - 1) * 2, base64: btoa(binary) });
+      frames.push({ timestamp: (i - 1) * step, base64: btoa(binary) });
+      i++;
     } catch {
-      // frame missing — ignore
+      break;
     }
   }
+  console.log('[extract] total frames read:', frames.length);
 
   return { audio, frames, duration };
 }
